@@ -1,0 +1,685 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>S&S</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&display=swap');
+
+  @font-face {
+    font-family: 'MessinaSans';
+    src: url('assets/messina-sans.woff2') format('woff2');
+    font-weight: 400;
+    font-style: normal;
+    font-display: swap;
+  }
+
+  *, *::before, *::after {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+  }
+
+  :root {
+    --bg:  #0e0e0e;
+    --fg:  #f0efeb;
+    --mid: #6b6b6b;
+    --dim: rgba(240,239,235,0.12);
+  }
+
+  html, body {
+    width: 100%;
+    height: 100%;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: 'MessinaSans', Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    overflow: hidden;
+    overscroll-behavior: none;
+    cursor: none;
+  }
+
+  /* ──────────────────────────────
+     CUSTOM ASTERISK CURSOR
+  ────────────────────────────── */
+  #cursor {
+    position: fixed;
+    top: 0; left: 0;
+    width: 38px;
+    height: 38px;
+    margin: -19px 0 0 -19px;
+    z-index: 9999;
+    pointer-events: none;
+    color: #ffffff;
+    mix-blend-mode: difference;
+    will-change: transform;
+    transition: opacity 0.3s ease;
+  }
+  #cursor svg { display: block; width: 100%; height: 100%; }
+  #cursor.idle { opacity: 0; }
+  /* scale handled via JS transform */
+
+  /* ──────────────────────────────
+     DRAGGABLE SCENE
+  ────────────────────────────── */
+  #scene {
+    position: fixed;
+    inset: 0;
+    z-index: 1;
+    cursor: none;
+    touch-action: none;
+  }
+
+  #field {
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    will-change: transform;
+  }
+
+  .tile {
+    position: absolute;
+    top: 0; left: 0;
+    will-change: transform;
+  }
+
+  .cell {
+    position: absolute;
+    overflow: hidden;
+    background: #161616;
+    border-radius: 2px;
+    cursor: none;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+
+  .cell .poster,
+  .cell video {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+    -webkit-user-drag: none;
+    user-select: none;
+    pointer-events: none;
+  }
+
+  .cell .poster {
+    opacity: 0;
+    transition: opacity 0.6s ease;
+    filter: grayscale(0.15) brightness(0.92);
+  }
+  .cell .poster.loaded { opacity: 1; }
+
+  .cell video {
+    opacity: 0;
+    transition: opacity 0.45s ease;
+  }
+  .cell.playing video { opacity: 1; }
+
+  /* gentle scale + reveal on hover */
+  .cell::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    box-shadow: inset 0 0 0 1px rgba(240,239,235,0);
+    transition: box-shadow 0.4s ease, background 0.4s ease;
+    background: rgba(14,14,14,0.18);
+    pointer-events: none;
+  }
+  .cell:hover::after {
+    background: rgba(14,14,14,0);
+    box-shadow: inset 0 0 0 1px rgba(240,239,235,0.22);
+  }
+
+  .cell .label {
+    position: absolute;
+    left: 0; bottom: 0;
+    padding: 0.65rem 0.8rem;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.6rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--fg);
+    opacity: 0;
+    transform: translateY(4px);
+    transition: opacity 0.35s ease, transform 0.35s ease;
+    pointer-events: none;
+    z-index: 3;
+    text-shadow: 0 1px 12px rgba(0,0,0,0.8);
+  }
+  .cell:hover .label { opacity: 1; transform: translateY(0); }
+
+  /* ──────────────────────────────
+     EDGE VIGNETTE
+  ────────────────────────────── */
+  #vignette {
+    position: fixed;
+    inset: 0;
+    z-index: 2;
+    pointer-events: none;
+    background:
+      radial-gradient(ellipse 75% 75% at 50% 50%,
+        rgba(14,14,14,0) 28%,
+        rgba(14,14,14,0.55) 62%,
+        rgba(14,14,14,0.92) 85%,
+        #0e0e0e 100%);
+  }
+
+  /* ──────────────────────────────
+     CENTRE LOGOTYPE
+  ────────────────────────────── */
+  .logo-wrap {
+    position: fixed;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 5;
+    pointer-events: none;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    /* Invert against whatever sits behind: light over dark, dark over light */
+    mix-blend-mode: difference;
+  }
+  .logo {
+    font-family: 'MessinaSans', Helvetica, Arial, sans-serif;
+    font-size: clamp(4.2rem, 15vw, 12rem);
+    letter-spacing: -0.04em;
+    line-height: 0.88;
+    color: #ffffff;
+  }
+  .logo .amp { letter-spacing: -0.07em; }
+
+  .tagline {
+    margin-top: clamp(0.7rem, 1.6vw, 1.1rem);
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: clamp(0.6rem, 0.95vw, 0.78rem);
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    color: #ffffff;
+    opacity: 0.6;
+  }
+
+  .drag-hint {
+    margin-top: clamp(1.6rem, 4vw, 2.6rem);
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: clamp(0.52rem, 0.8vw, 0.66rem);
+    letter-spacing: 0.28em;
+    text-transform: uppercase;
+    color: #ffffff;
+    opacity: 0.7;
+    animation: hintPulse 3.4s ease-in-out infinite;
+    transition: opacity 0.8s ease;
+  }
+  .drag-hint.gone { opacity: 0; }
+  @keyframes hintPulse {
+    0%, 100% { opacity: 0.35; }
+    50%      { opacity: 0.8; }
+  }
+
+  /* ──────────────────────────────
+     FOOTER
+  ────────────────────────────── */
+  footer {
+    position: fixed;
+    bottom: 0; left: 0; right: 0;
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    padding: clamp(1.2rem, 3vw, 1.9rem) clamp(1.4rem, 3.5vw, 2.6rem);
+    z-index: 6;
+    pointer-events: none;
+  }
+  footer span, footer a {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: clamp(0.54rem, 0.8vw, 0.68rem);
+    letter-spacing: 0.08em;
+    color: var(--mid);
+    text-decoration: none;
+    pointer-events: all;
+    transition: color 0.25s ease;
+  }
+  footer a:hover { color: var(--fg); }
+  .footer-centre {
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+  }
+
+  /* ──────────────────────────────
+     PROJECT DETAIL OVERLAY
+  ────────────────────────────── */
+  #detail {
+    position: fixed;
+    inset: 0;
+    z-index: 50;
+    background: rgba(8,8,8,0.92);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    display: flex;
+    flex-direction: column;
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.45s ease, visibility 0.45s ease;
+  }
+  #detail.open { opacity: 1; visibility: visible; }
+
+  #detail-video-wrap {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: clamp(2.5rem, 6vw, 5rem);
+    min-height: 0;
+  }
+  #detail-video {
+    max-width: min(90vw, 1100px);
+    max-height: 100%;
+    width: auto;
+    height: auto;
+    object-fit: contain;
+    border-radius: 3px;
+    transform: scale(0.97);
+    transition: transform 0.5s cubic-bezier(0.16,1,0.3,1);
+  }
+  #detail.open #detail-video { transform: scale(1); }
+
+  #detail-bar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: clamp(1.1rem, 2.5vw, 1.7rem) clamp(1.4rem, 3.5vw, 2.6rem);
+    border-top: 1px solid var(--dim);
+    flex-shrink: 0;
+  }
+  #detail-title,
+  #detail-close {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: clamp(0.6rem, 0.9vw, 0.74rem);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--mid);
+  }
+  #detail-close {
+    cursor: none;
+    border: none;
+    background: none;
+    transition: color 0.2s ease;
+  }
+  #detail-close:hover { color: var(--fg); }
+
+  @media (hover: none) {
+    .drag-hint { letter-spacing: 0.2em; }
+    #cursor { display: none; }
+    html, body, #scene, .cell, #detail-close { cursor: auto; }
+  }
+</style>
+</head>
+<body>
+
+<div id="cursor">
+  <svg viewBox="-50 -50 100 100" aria-hidden="true">
+    <g stroke="currentColor" stroke-width="13" stroke-linecap="round">
+      <line x1="0" y1="-42" x2="0" y2="42"/>
+      <line x1="0" y1="-42" x2="0" y2="42" transform="rotate(60)"/>
+      <line x1="0" y1="-42" x2="0" y2="42" transform="rotate(120)"/>
+    </g>
+  </svg>
+</div>
+
+<div id="scene">
+  <div id="field"></div>
+</div>
+
+<div id="vignette"></div>
+
+<div class="logo-wrap">
+  <div class="logo">S<span class="amp">&amp;</span>S</div>
+  <div class="tagline">Design &amp; Technology</div>
+  <div class="drag-hint" id="drag-hint">Drag to explore</div>
+</div>
+
+<footer>
+  <span>Selected Work</span>
+  <span class="footer-centre">London</span>
+  <a href="mailto:hello@sands.studio">hello@sands.studio</a>
+</footer>
+
+<div id="detail">
+  <div id="detail-video-wrap">
+    <video id="detail-video" loop muted playsinline></video>
+  </div>
+  <div id="detail-bar">
+    <span id="detail-title"></span>
+    <button id="detail-close">Close</button>
+  </div>
+</div>
+
+<script>
+/* ══════════════════════════════════════════
+   DATA
+══════════════════════════════════════════ */
+const SOURCES = [
+  { src: 'assets/hunger-archive.mp4', aspect: 0.75, title: 'Hunger — Editorial' },
+  { src: 'assets/bbh-card-hover.mp4', aspect: 1.0,  title: 'BBH — Interface' },
+  { src: 'assets/mm-3.mp4',           aspect: 1.0,  title: 'MM — Motion' },
+  { src: 'assets/n6-cover.mp4',       aspect: 1.0,  title: 'N6 — Identity' },
+  { src: 'assets/hunger-cover.mp4',   aspect: 1.0,  title: 'Hunger — Cover' },
+  { src: 'assets/n6-everything.mp4',  aspect: 1.0,  title: 'N6 — Everything' },
+  { src: 'assets/hunger-home.mp4',    aspect: 0.75, title: 'Hunger — Home' },
+];
+
+/* One repeating tile (the canvas tessellates this block in every
+   direction). A loose, irregular grid with a clearing kept near the
+   centre so the logotype reads cleanly at rest. */
+const TILE = { w: 1750, h: 1080 };
+const CELLS = [
+  // col 0
+  { s: 0, x:   40, y:   40, w: 190 },
+  { s: 5, x:   40, y:  400, w: 185 },
+  { s: 3, x:   40, y:  760, w: 195 },
+  // col 1 (staggered)
+  { s: 1, x:  390, y:  220, w: 175 },
+  { s: 6, x:  390, y:  580, w: 180 },
+  { s: 2, x:  390, y:  940, w: 185 },
+  // col 2
+  { s: 2, x:  740, y:   40, w: 200 },
+  { s: 4, x:  740, y:  400, w: 180 },
+  { s: 1, x:  740, y:  760, w: 190 },
+  // col 3 (staggered)
+  { s: 3, x: 1090, y:  220, w: 180 },
+  { s: 0, x: 1090, y:  580, w: 185 },
+  { s: 5, x: 1090, y:  940, w: 175 },
+  // col 4
+  { s: 6, x: 1440, y:   40, w: 185 },
+  { s: 2, x: 1440, y:  400, w: 195 },
+  { s: 4, x: 1440, y:  760, w: 180 },
+];
+
+/* ══════════════════════════════════════════
+   POSTER GENERATION (first frame → image)
+   Keeps the canvas cheap: only the hovered
+   cell ever streams video.
+══════════════════════════════════════════ */
+const posters = new Array(SOURCES.length).fill(null);
+
+function applyPoster(i) {
+  if (!posters[i]) return;
+  document.querySelectorAll(`.poster[data-s="${i}"]`).forEach(img => {
+    img.src = posters[i];
+    img.classList.add('loaded');
+  });
+}
+
+function generatePosters() {
+  SOURCES.forEach((s, i) => {
+    const v = document.createElement('video');
+    v.muted = true; v.playsInline = true; v.preload = 'auto';
+    v.crossOrigin = 'anonymous';
+    v.src = s.src;
+
+    const grab = () => {
+      try {
+        const c = document.createElement('canvas');
+        c.width  = v.videoWidth  || 400;
+        c.height = v.videoHeight || 400;
+        c.getContext('2d').drawImage(v, 0, 0, c.width, c.height);
+        posters[i] = c.toDataURL('image/jpeg', 0.72);
+        applyPoster(i);
+      } catch (e) {
+        /* tainted canvas (file://) — leave the dark cell background */
+      }
+      v.removeAttribute('src');
+      v.load();
+    };
+
+    v.addEventListener('loadeddata', () => {
+      if (v.readyState >= 2) { try { v.currentTime = 0.06; } catch (e) { grab(); } }
+    });
+    v.addEventListener('seeked', grab, { once: true });
+    v.addEventListener('error', () => {});
+  });
+}
+
+/* ══════════════════════════════════════════
+   BUILD THE INFINITE FIELD
+══════════════════════════════════════════ */
+const scene = document.getElementById('scene');
+const field = document.getElementById('field');
+
+function buildCell(cell) {
+  const sObj = SOURCES[cell.s];
+  const el = document.createElement('div');
+  el.className = 'cell';
+  el._sObj = sObj;
+  el.style.left   = cell.x + 'px';
+  el.style.top    = cell.y + 'px';
+  el.style.width  = cell.w + 'px';
+  el.style.height = Math.round(cell.w * sObj.aspect) + 'px';
+
+  const img = document.createElement('img');
+  img.className = 'poster';
+  img.setAttribute('data-s', cell.s);
+  img.alt = sObj.title;
+  if (posters[cell.s]) { img.src = posters[cell.s]; img.classList.add('loaded'); }
+  el.appendChild(img);
+
+  const video = document.createElement('video');
+  video.muted = true; video.loop = true; video.playsInline = true; video.preload = 'none';
+  el.appendChild(video);
+
+  const label = document.createElement('div');
+  label.className = 'label';
+  label.textContent = sObj.title;
+  el.appendChild(label);
+
+  let loaded = false;
+  el.addEventListener('mouseenter', () => {
+    if (!loaded) { video.src = sObj.src; loaded = true; }
+    video.currentTime = 0;
+    video.play().catch(() => {});
+    el.classList.add('playing');
+    cursorHover = true;
+  });
+  el.addEventListener('mouseleave', () => {
+    el.classList.remove('playing');
+    video.pause();
+    cursorHover = false;
+  });
+
+  return el;
+}
+
+let tiles = [];
+
+function buildField() {
+  field.innerHTML = '';
+  tiles = [];
+
+  const cols = Math.ceil(innerWidth  / TILE.w) + 2;
+  const rows = Math.ceil(innerHeight / TILE.h) + 2;
+
+  // master tile contents (built once, then cloned for speed of authoring)
+  const master = document.createElement('div');
+  master.className = 'tile';
+  CELLS.forEach(c => master.appendChild(buildCell(c)));
+
+  for (let gy = 0; gy < rows; gy++) {
+    for (let gx = 0; gx < cols; gx++) {
+      const t = gx === 0 && gy === 0 ? master : cloneTile();
+      field.appendChild(t);
+      tiles.push({ el: t, gx, gy });
+    }
+  }
+  render();
+}
+
+function cloneTile() {
+  const t = document.createElement('div');
+  t.className = 'tile';
+  CELLS.forEach(c => t.appendChild(buildCell(c)));
+  return t;
+}
+
+/* ══════════════════════════════════════════
+   DRAG + INERTIA
+══════════════════════════════════════════ */
+let offX = -TILE.w * 0.16, offY = -TILE.h * 0.10; // pleasant starting framing
+let velX = 0, velY = 0;
+let dragging = false;
+let startX = 0, startY = 0, lastX = 0, lastY = 0, moved = 0;
+let downCell = null;
+const TAP_SLOP = 8;
+
+function render() {
+  const cols = Math.ceil(innerWidth  / TILE.w) + 2;
+  const rows = Math.ceil(innerHeight / TILE.h) + 2;
+  const owx = ((offX % TILE.w) + TILE.w) % TILE.w;
+  const owy = ((offY % TILE.h) + TILE.h) % TILE.h;
+
+  tiles.forEach(t => {
+    const px = t.gx * TILE.w + owx - TILE.w;
+    const py = t.gy * TILE.h + owy - TILE.h;
+    t.el.style.transform = `translate3d(${px}px, ${py}px, 0)`;
+  });
+}
+
+function loop() {
+  if (!dragging) {
+    offX += velX;
+    offY += velY;
+    velX *= 0.93;
+    velY *= 0.93;
+    if (Math.abs(velX) < 0.05) velX = 0;
+    if (Math.abs(velY) < 0.05) velY = 0;
+    if (velX || velY) render();
+  }
+  requestAnimationFrame(loop);
+}
+
+const hint = document.getElementById('drag-hint');
+
+function pointerDown(e) {
+  dragging = true;
+  cursorDown = true;
+  moved = 0;
+  startX = lastX = e.clientX;
+  startY = lastY = e.clientY;
+  velX = velY = 0;
+  downCell = e.target.closest('.cell');
+}
+
+function pointerMove(x, y) {
+  if (!dragging) return;
+  const dx = x - lastX, dy = y - lastY;
+  lastX = x; lastY = y;
+  offX += dx; offY += dy;
+  velX = velX * 0.6 + dx * 0.4;
+  velY = velY * 0.6 + dy * 0.4;
+  moved += Math.abs(dx) + Math.abs(dy);
+  if (moved > TAP_SLOP) hint.classList.add('gone');
+  render();
+}
+
+function pointerUp() {
+  cursorDown = false;
+  if (!dragging) return;
+  dragging = false;
+  // a clean tap (negligible movement) on a cell opens its project
+  if (moved <= TAP_SLOP && downCell && downCell._sObj) {
+    velX = velY = 0;
+    openDetail(downCell._sObj);
+  }
+  downCell = null;
+}
+
+scene.addEventListener('pointerdown', e => {
+  scene.setPointerCapture(e.pointerId);
+  pointerDown(e);
+});
+scene.addEventListener('pointermove', e => pointerMove(e.clientX, e.clientY));
+scene.addEventListener('pointerup',   pointerUp);
+scene.addEventListener('pointercancel', pointerUp);
+
+// wheel / trackpad pans the canvas too
+scene.addEventListener('wheel', e => {
+  e.preventDefault();
+  offX -= e.deltaX;
+  offY -= e.deltaY;
+  velX = -e.deltaX * 0.2;
+  velY = -e.deltaY * 0.2;
+  hint.classList.add('gone');
+  render();
+}, { passive: false });
+
+/* ══════════════════════════════════════════
+   DETAIL OVERLAY
+══════════════════════════════════════════ */
+const detail      = document.getElementById('detail');
+const detailVideo = document.getElementById('detail-video');
+const detailTitle = document.getElementById('detail-title');
+const detailClose = document.getElementById('detail-close');
+
+function openDetail(sObj) {
+  detailVideo.src = sObj.src;
+  detailTitle.textContent = sObj.title;
+  detail.classList.add('open');
+  detailVideo.play().catch(() => {});
+}
+function closeDetail() {
+  detail.classList.remove('open');
+  detailVideo.pause();
+  setTimeout(() => { detailVideo.removeAttribute('src'); detailVideo.load(); }, 450);
+}
+detailClose.addEventListener('click', closeDetail);
+detail.addEventListener('click', e => {
+  if (e.target === detail || e.target.id === 'detail-video-wrap') closeDetail();
+});
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeDetail(); });
+
+/* ══════════════════════════════════════════
+   CUSTOM ASTERISK CURSOR
+══════════════════════════════════════════ */
+const cursorEl = document.getElementById('cursor');
+let cursorHover = false, cursorDown = false;
+let cx = innerWidth / 2, cy = innerHeight / 2;   // smoothed position
+let tcx = cx, tcy = cy;                           // target position
+let spin = 0, scale = 1;
+
+document.addEventListener('mousemove', e => {
+  tcx = e.clientX; tcy = e.clientY;
+  cursorEl.classList.remove('idle');
+});
+document.addEventListener('mouseleave', () => cursorEl.classList.add('idle'));
+
+function cursorLoop() {
+  cx += (tcx - cx) * 0.25;
+  cy += (tcy - cy) * 0.25;
+  spin += 0.4;
+  const target = cursorDown ? 0.7 : (cursorHover ? 1.55 : 1);
+  scale += (target - scale) * 0.18;
+  cursorEl.style.transform =
+    `translate(${cx}px, ${cy}px) rotate(${spin}deg) scale(${scale})`;
+  requestAnimationFrame(cursorLoop);
+}
+requestAnimationFrame(cursorLoop);
+
+/* ══════════════════════════════════════════
+   INIT
+══════════════════════════════════════════ */
+let resizeTimer;
+window.addEventListener('resize', () => {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(buildField, 150);
+});
+
+generatePosters();
+buildField();
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
