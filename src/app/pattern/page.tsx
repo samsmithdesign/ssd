@@ -136,7 +136,17 @@ export default function PatternPage() {
   const hoveredIndexRef = useRef<number | null>(null);
   const tickClearRef = useRef<number | null>(null);
   const revealGenRef = useRef(0);
-  const timersRef = useRef<number[]>([]);
+  const revealJobsRef = useRef<
+    | {
+        startAt: number;
+        stepMs: number;
+        steps: number;
+        step: number;
+        nextAt: number;
+        target: string;
+      }[]
+    | null
+  >(null);
   const showingToRef = useRef(false);
   const reducedMotionRef = useRef(false);
   const rafRef = useRef<number>(0);
@@ -151,12 +161,24 @@ export default function PatternPage() {
   } | null>(null);
   const [bgReady, setBgReady] = useState(false);
   const [bgFailed, setBgFailed] = useState(false);
-  const [captionPhrase, setCaptionPhrase] = useState(PHRASE_TO);
   const [gridKey, setGridKey] = useState(0);
+  const captionElRef = useRef<HTMLSpanElement>(null);
+  const captionPhraseRef = useRef(PHRASE_TO);
 
-  const clearRevealTimers = useCallback(() => {
-    for (const id of timersRef.current) window.clearTimeout(id);
-    timersRef.current = [];
+  const setCaptionTarget = useCallback((phrase: string) => {
+    captionPhraseRef.current = phrase;
+    // DOM-only — avoid React re-render fighting scramble textContent writes.
+    if (captionElRef.current) captionElRef.current.textContent = phrase;
+  }, []);
+
+  useLayoutEffect(() => {
+    if (captionElRef.current) {
+      captionElRef.current.textContent = captionPhraseRef.current;
+    }
+  });
+
+  const clearReveal = useCallback(() => {
+    revealJobsRef.current = null;
     revealGenRef.current += 1;
   }, []);
 
@@ -207,7 +229,10 @@ export default function PatternPage() {
   );
 
   const rebuild = useCallback(
-    (sample: ((nx: number, ny: number) => number) | null) => {
+    (
+      sample: ((nx: number, ny: number) => number) | null,
+      opts?: { resetReveal?: boolean },
+    ) => {
       const root = rootRef.current;
       if (!root) return;
       const w = root.clientWidth || window.innerWidth;
@@ -222,21 +247,27 @@ export default function PatternPage() {
       const rows = Math.max(1, Math.ceil(h / cellW));
       const cellH = h / rows;
       const cells = buildCells(cols, rows, cellW, cellH, sample);
+      const showingTo = opts?.resetReveal ? false : showingToRef.current;
+      if (opts?.resetReveal) showingToRef.current = false;
+      // Remap shown glyphs to the active phrase after a size rebuild.
+      for (const cell of cells) {
+        cell.shown = showingTo ? cell.toGlyph : cell.fromGlyph;
+      }
       cellsRef.current = cells;
       cellElsRef.current = new Array(cells.length).fill(null);
       colsRef.current = cols;
-      clearRevealTimers();
-      showingToRef.current = false;
-      setCaptionPhrase(PHRASE_TO);
+      clearReveal();
+      // Caption = next target after the currently shown phrase.
+      setCaptionTarget(showingTo ? PHRASE_FROM : PHRASE_TO);
       setLayout({ cols, rows, cellW, cellH, cells });
       setGridKey((k) => k + 1);
     },
-    [clearRevealTimers],
+    [clearReveal, setCaptionTarget],
   );
 
   // Initial grid with fallback luminance; upgrade when image samples land.
   useEffect(() => {
-    rebuild(null);
+    rebuild(null, { resetReveal: true });
   }, [rebuild]);
 
   // Load background image for luminance + display; fall back if missing.
@@ -259,8 +290,8 @@ export default function PatternPage() {
       if (cancelled) return;
       setBgReady(false);
       setBgFailed(true);
-      // Keep current fallback grid — comment marks where image would swap in.
-      rebuild(null);
+      // Image missing: keep the already-built fallback grid (no rebuild).
+      // Background CSS swaps to the radial gradient via bgFailed.
     };
     img.src = PATTERN_SRC;
     return () => {
@@ -301,13 +332,40 @@ export default function PatternPage() {
     return () => window.removeEventListener("resize", onResize);
   }, [bgFailed, bgReady, rebuild, sampleLuminance]);
 
-  // Hover rAF — styles only, never React state.
+  // Hover + reveal rAF — styles/glyphs written directly, never React state on move.
   useEffect(() => {
-    const tick = () => {
+    const tick = (now: number) => {
       const cells = cellsRef.current;
       const ptr = pointerRef.current;
       let nearest: number | null = null;
       let nearestDist = Infinity;
+
+      // Advance discrete scramble jobs (single rAF — avoids timeout congestion).
+      const jobs = revealJobsRef.current;
+      if (jobs) {
+        let remaining = 0;
+        for (let i = 0; i < jobs.length; i++) {
+          const job = jobs[i];
+          if (!job) continue;
+          const cell = cells[i];
+          if (!cell) {
+            jobs[i] = null!;
+            continue;
+          }
+          while (now >= job.nextAt && job.step < job.steps) {
+            job.step += 1;
+            if (job.step >= job.steps) {
+              paintCell(i, cell.baseOpacity, cell.baseScale, job.target);
+              jobs[i] = null!;
+              break;
+            }
+            paintCell(i, cell.baseOpacity, cell.baseScale, randomAlnum());
+            job.nextAt += job.stepMs;
+          }
+          if (jobs[i]) remaining += 1;
+        }
+        if (remaining === 0) revealJobsRef.current = null;
+      }
 
       for (let i = 0; i < cells.length; i++) {
         const cell = cells[i]!;
@@ -365,11 +423,11 @@ export default function PatternPage() {
       const cells = cellsRef.current;
       if (!cells.length) return;
 
-      clearRevealTimers();
-      const gen = revealGenRef.current;
+      clearReveal();
       const toTarget = !showingToRef.current;
       showingToRef.current = toTarget;
-      setCaptionPhrase(toTarget ? PHRASE_FROM : PHRASE_TO);
+      // Caption shows the next target (what click will reveal into).
+      setCaptionTarget(toTarget ? PHRASE_FROM : PHRASE_TO);
 
       const targetKey = toTarget ? "toGlyph" : "fromGlyph";
 
@@ -381,6 +439,10 @@ export default function PatternPage() {
         return;
       }
 
+      const now = performance.now();
+      const jobs: NonNullable<typeof revealJobsRef.current> = new Array(
+        cells.length,
+      );
       for (let i = 0; i < cells.length; i++) {
         const cell = cells[i]!;
         const dist = Math.hypot(cell.cx - originX, cell.cy - originY);
@@ -391,28 +453,19 @@ export default function PatternPage() {
           ? randInt(SAME_GLYPH_FLICKER_MIN, SAME_GLYPH_FLICKER_MAX)
           : randInt(STEP_COUNT_MIN, STEP_COUNT_MAX);
         const stepMs = randInt(STEP_MS_MIN, STEP_MS_MAX);
-
-        const startId = window.setTimeout(() => {
-          if (revealGenRef.current !== gen) return;
-          let step = 0;
-          const stepOnce = () => {
-            if (revealGenRef.current !== gen) return;
-            step += 1;
-            if (step >= steps) {
-              paintCell(i, cell.baseOpacity, cell.baseScale, target);
-              return;
-            }
-            // Discrete scramble — never interpolate letterforms.
-            paintCell(i, cell.baseOpacity, cell.baseScale, randomAlnum());
-            const next = window.setTimeout(stepOnce, stepMs);
-            timersRef.current.push(next);
-          };
-          stepOnce();
-        }, delay);
-        timersRef.current.push(startId);
+        const startAt = now + delay;
+        jobs[i] = {
+          startAt,
+          stepMs,
+          steps,
+          step: 0,
+          nextAt: startAt,
+          target,
+        };
       }
+      revealJobsRef.current = jobs;
     },
-    [clearRevealTimers, paintCell],
+    [clearReveal, paintCell, setCaptionTarget],
   );
 
   const onPointerMove = (e: React.PointerEvent) => {
@@ -448,7 +501,7 @@ export default function PatternPage() {
     return () => window.removeEventListener("keydown", onKey);
   }, [runReveal]);
 
-  useEffect(() => () => clearRevealTimers(), [clearRevealTimers]);
+  useEffect(() => () => clearReveal(), [clearReveal]);
 
   const cells = layout?.cells ?? [];
 
@@ -509,6 +562,11 @@ export default function PatternPage() {
             key={`${gridKey}-${i}`}
             ref={(el) => {
               cellElsRef.current[i] = el;
+              // Seed glyph once on mount — avoid React children overwriting scramble.
+              if (el && !el.dataset.seeded) {
+                el.dataset.seeded = "1";
+                el.textContent = cell.shown === " " ? "\u00a0" : cell.shown;
+              }
             }}
             style={{
               display: "flex",
@@ -528,9 +586,7 @@ export default function PatternPage() {
               willChange: "transform, opacity",
               pointerEvents: "none",
             }}
-          >
-            {cell.shown === " " ? "\u00a0" : cell.shown}
-          </span>
+          />
         ))}
       </div>
 
@@ -550,7 +606,7 @@ export default function PatternPage() {
           pointerEvents: "none",
         }}
       >
-        {captionPhrase}
+        <span ref={captionElRef} data-caption-phrase />
         <br />
         click to reveal
       </p>
