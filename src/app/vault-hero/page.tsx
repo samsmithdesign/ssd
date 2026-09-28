@@ -12,9 +12,9 @@ const FONT_SCALE = 0.72;
 /** Soft spotlight radius around the pointer (CSS px). */
 const HOVER_RADIUS_PX = 140;
 /** Base glyph alpha at rest (very faint, vault-like). */
-const REST_ALPHA = 0.07;
+const REST_ALPHA = 0.12;
 /** Peak glyph alpha at cursor center. */
-const HOVER_ALPHA = 0.72;
+const HOVER_ALPHA = 0.78;
 /** Overall canvas opacity (matches vault `.vault-ascii-backdrop`). */
 const CANVAS_OPACITY = 0.8;
 /** Glyph fill (near-black on white). */
